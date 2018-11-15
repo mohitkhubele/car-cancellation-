@@ -1,0 +1,622 @@
+rm(list=ls(all=TRUE))
+cabtrain<-read.csv("file:///C:/Users/Mohit/Downloads/Kaggle_YourCabs_training.csv")
+
+## Loading the required libraries 
+library(ipred)
+library(ROSE)
+library(ada)
+library(rpart.plot)
+library(rpart)
+library(randomForest)
+library(C50)
+library(factoextra)
+library(xgboost)
+library(glmnet)
+library(mice)
+library(dplyr)
+library(ROCR)
+library(DMwR)
+library(car)
+library(MASS)
+library(vegan)
+library(dummies)
+library(infotheo)
+library(caTools)
+library(caret)
+library(e1071)
+library(corrplot)
+library(dplyr)
+library(purrr)
+#read the data
+cabtrain<-read.csv('file:///C:/Users/Mohit/Downloads/Kaggle_YourCabs_training.csv',header = T,sep = ',',na.strings = "NULL")
+
+tail(cabtrain)
+
+dim(cabtrain)
+ 
+
+#Drop the duplicate records.
+cabtrain <- cabtrain[!duplicated(cabtrain),]
+
+# there are no duplicate values present in train and test
+
+#check for missing values
+
+sum(is.na(cabtrain))/(43431*20) #17% missing values
+#missing values by each attribute
+colSums(is.na(cabtrain))
+dims <-dim(cabtrain)
+dims[1]
+# percentage wise
+count <-apply(cabtrain, 2, function(x) sum(is.na(x))/dims[1])
+count
+#package_id,to_city_id,from_city_id,to_date have more than 30% missing values so delete that variables
+cabtrain$package_id <- NULL
+cabtrain$from_city_id <- NULL
+cabtrain$to_city_id <- NULL
+cabtrain$to_date <- NULL
+
+#see the structure and summary.
+summary(cabtrain)
+str(cabtrain)
+
+#converting into appropriate datatype
+
+cabtrain$vehicle_model_id <- as.factor(cabtrain$vehicle_model_id)
+levels(cabtrain$vehicle_model_id)
+cabtrain$travel_type_id <- as.factor(cabtrain$travel_type_id)
+levels(cabtrain$travel_type_id)
+cabtrain$online_booking <- as.factor(cabtrain$online_booking)
+levels(cabtrain$online_booking)
+cabtrain$mobile_site_booking <- as.factor(cabtrain$mobile_site_booking)
+levels(cabtrain$mobile_site_booking)
+
+cabtrain$Cost_of_error<-as.factor(cabtrain$Cost_of_error)
+levels(cabtrain$Cost_of_error)
+
+cabtrain$Cost_of_error<-NULL #we dont have this attribute in test data
+
+str(cabtrain)
+
+#seperating date and time in from_date and booking_created
+library(plyr)
+cabtrain$from_date <- as.character(cabtrain$from_date)
+list <- strsplit(cabtrain$from_date, " ")
+df1 <- ldply(list)
+colnames(df1) <- c("fr_date","fr_time")
+
+cabtrain$booking_created <- as.character(cabtrain$booking_created)
+list1 <- strsplit(cabtrain$booking_created, " ")
+df2 <- ldply(list1)
+colnames(df2) <- c("booking_date","booking_time")
+
+cabtrain <- cbind(cabtrain,df1,df2)
+#remove from_date and booking_created
+cabtrain$from_date <- NULL
+cabtrain$booking_created <- NULL
+
+str(cabtrain)
+#convert into date format
+sum(is.na(cabtrain$fr_date))
+
+cabtrain$fr_date <- as.Date(as.character(cabtrain$fr_date), format = "%m/%d/%Y")
+
+#unique(cabtrain$fr_date)
+#length(cabtrain$fr_date)
+
+cabtrain$booking_date <- as.Date(as.character(cabtrain$booking_date), format = "%m/%d/%Y")
+
+cabtrain$diff_days <- difftime(cabtrain$fr_date,cabtrain$booking_date, units = c("days"))
+table(cabtrain$diff_days)
+str(cabtrain)
+
+#finding difference between two time variables
+
+cabtrain$fr_time <- as.POSIXct(cabtrain$fr_time, format="%H:%M")
+cabtrain$booking_time <- as.POSIXct(cabtrain$booking_time, format = "%H:%M")
+
+time <- data.frame(cabtrain$fr_time,cabtrain$booking_time)
+
+#time$diff_time[1] <- as.difftime(time$cabtrain.fr_time[1],time$cabtrain.booking_time[1], format= %X,units = "auto")
+
+for (i in 1:nrow(time)){
+  #print(i)
+  time$diff_time[i] <- time$cabtrain.fr_time[i]-time$cabtrain.booking_time[i]
+}
+
+cabtrain <- cbind(cabtrain,time$diff_time)
+cabtrain$fr_time <- NULL
+cabtrain$booking_time <- NULL
+
+str(cabtrain)
+#remove unnecessary data
+df1 <- NULL
+df2 <- NULL
+time <- NULL
+#binning two date variable into days and months
+library(lubridate)
+cabtrain$fr_day <- weekdays(cabtrain$fr_date)
+cabtrain$booking_day <- weekdays(cabtrain$booking_date)
+cabtrain$fr_month <-months(cabtrain$fr_date)
+cabtrain$booking_month <-months(cabtrain$booking_date)
+
+str(cabtrain)
+#remove date and unique attributes
+cabtrain$fr_date <- NULL
+cabtrain$booking_date <- NULL
+cabtrain$id <- NULL
+
+#converting into appropriate datatypes
+l <- c(12,15:18)
+l
+cabtrain[,l] <- lapply(cabtrain[,l],factor)
+cabtrain$diff_days <- as.integer(cabtrain$diff_days)
+
+str(cabtrain)
+
+#write.csv(cabtrain,"rawdata.csv",row.names=F)
+#imputation for missing values
+library(DMwR)
+#cabtrain_knn <- knnImputation(cabtrain,k=5)
+#write.csv(cabtrain_knn,"cabtrain_knn.csv", row.names=F)
+
+cabtrain_central <- centralImputation(cabtrain)
+write.csv(cabtrain_central,"cabtrain_central.csv", row.names=F)
+
+str(cabtrain_central)
+
+
+#class imbalance
+
+table(cabtrain$Car_Cancellation)
+cabtrain_central<-cabtrain
+
+############# Data visualization ##############
+default_par <- par() #save the default params
+par(mfrow=c(1,1)) # Customize the params; mfrow=c(1,2) specifies 2 multiple figures in 1 row;
+par(bg="grey")
+
+hist(cabtrain_central$diff_days, col = "green", xlab = "Difference in days",xlim = c(-10,50))
+hist(cabtrain_central$`time$diff_time`, col = "red",xlab = "time difference" , xlim = c(-70,100))
+
+#boxplot(cabtrain_central$diff_days,ylim = c(0,20))
+#boxplot(cabtrain_central$`time$diff_time`)
+
+ggplot(cabtrain_central,aes(x=online_booking, fill= Car_Cancellation)) +
+  geom_bar(width = 0.5) +
+  xlab("online_booking") + ylab("car_cancellation")  +
+  ggtitle("online booking")+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=45,size=12),
+        text=element_text(size=14)) + geom_text(stat="count",aes(label=..count..),vjust=0)
+
+ggplot(cabtrain_central,aes(x = mobile_site_booking, fill= Car_Cancellation)) +
+  geom_bar(width = 0.5) +
+  xlab("mobile_site_booking") + ylab("car_cancellation")  +
+  ggtitle("Mobile booking")+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=45,size=12),
+        text=element_text(size=14)) + geom_text(stat="count",aes(label=..count..),vjust=0)
+
+ggplot(cabtrain_central,aes(x = vehicle_model_id, fill= Car_Cancellation)) +
+  geom_bar(width = 0.5) +
+  xlab("vehicle_model_id") + ylab("car_cancellation")  +
+  ggtitle("Distribution of vehicle model id")+
+  theme(axis.text.x=element_text(angle=45,size=12),
+        text=element_text(size=14)) 
+
+
+ggplot(cabtrain_central,aes(x = travel_type_id, fill= Car_Cancellation)) +
+  geom_bar(width = 0.5) +
+  xlab("travel_type_id") + ylab("car_cancellation")  +
+  ggtitle("Distribution of travel_type_id")+
+  theme(axis.text.x=element_text(angle=45,size=12),
+        text=element_text(size=14)) 
+str(cabtrain_central)
+
+
+
+ggplot(cabtrain_central,aes(x = fr_day)) +
+  geom_bar(width = 0.5,colour = "red") +
+  xlab("from_day") + ylab("car_cancellation")  + theme_classic() +
+  ggtitle("Distribution of from day")+
+  theme(axis.text.x=element_text(angle=45,size=12),
+        text=element_text(size=14)) 
+
+plot(cabtrain_central$booking_month,col = "red", main="booking_month")
+
+ggplot(cabtrain_central , aes(x = booking_day)) +
+  geom_bar(position = 'dodge') + facet_grid(cabtrain_central$booking_month ~ .)
+
+plot(cabtrain_central$fr_month,col = "green", main="from_month")
+
+ggplot(cabtrain_central , aes(x = fr_day)) +
+  geom_bar(position = 'dodge') + facet_grid(cabtrain_central$fr_month ~ .)
+
+library(ggmap)
+summary(cabtrain_central)
+map <- get_map(gc)
+ggmap(get_map('bangalore,india',zoom=10))+geom_point(data = cabtrain_central,aes(x = from_long,y=from_lat))
+
+ggmap(get_map('bangalore,india',zoom=10))+geom_point(data = cabtrain_central,aes(x = to_long,y=to_lat))
+
+
+colnames(cabtrain_central)[14]<-"diffe_time"
+cabtrain_central$diffe_time <- as.integer(cabtrain_central$diffe_time)
+
+
+#binning 
+table(cabtrain_central$vehicle_model_id)
+nlevels(cabtrain_central$vehicle_model_id)
+
+vehicle_model_id <- function(x){
+  if(x == 12)
+    board <- '1'    
+  else if(x ==  24 | x== 28 | x==65 | x==85 |x==89)
+    board <- '2'    
+  else 
+    board <- '3'    
+  
+  return(board)
+}
+vehicle_model_id <- data.frame("vehicle_model_id"=sapply(cabtrain_central$vehicle_model_id,vehicle_model_id))
+table(vehicle_model_id)
+cabtrain_central$vehicle_model_id <- NULL
+cabtrain_central <- cbind(cabtrain_central,vehicle_model_id)
+
+
+smote <- SMOTE(Car_Cancellation ~ ., cabtrain_central, perc.over = 100, perc.under=200)
+table(smote$Car_Cancellation)
+
+###split train data into train and validation split
+set.seed(786)
+train_rows <- createDataPartition(smote$Car_Cancellation,p = 0.7,list = F)
+Train1<-smote[train_rows,]
+validation<-smote[-train_rows,]
+
+################# Model Building #####################
+#1.logistic model
+log_reg <- glm(Car_Cancellation ~ ., data = Train1, family = "binomial")
+summary(log_reg) # model is not significant 
+
+Step1 <- stepAIC(log_reg, direction="both")
+
+#build another model with significant variables
+log_reg1 <- glm(Train1$Car_Cancellation ~ user_id + travel_type_id + to_area_id + online_booking + 
+                  mobile_site_booking + from_lat + from_long + to_lat + to_long + 
+                  diffe_time + fr_day + booking_day + fr_month + booking_month + 
+                  vehicle_model_id, data = Train1, family = "binomial")
+summary(log_reg1) 
+vif(log_reg1) #no collinearity
+
+#cutoff value for output probabilities
+
+prod_train<-predict(log_reg1,type = "response")
+prod_train<-ifelse(prod_train>0.5,1,0)
+
+pred <- ROCR::prediction(prod_train, Train1$Car_Cancellation)
+
+library(ROCR)
+
+##glm_train_pre2<-ifelse(prod_train>0.5,1,0)
+
+perf <- ROCR::performance(pred,  "tpr", "fpr")
+perf_auc <- ROCR::performance(pred, measure="auc")
+auc <- perf_auc@y.values[[1]]
+
+print(auc) #77.38
+
+cutoffs <- data.frame(cut= perf@alpha.values[[1]], fpr= perf@x.values[[1]], 
+                      tpr=perf@y.values[[1]])
+
+cutoffs <- cutoffs[order(cutoffs$tpr, decreasing=TRUE),]
+
+plot(perf, colorize = TRUE, print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2,1.7))
+
+#Predictions
+predictTrain = predict(log_reg1, type="response", newdata=Train1)
+
+pred_class_train <- ifelse(predictTrain > 0.5, "yes", "no")
+table(Train1$Car_Cancellation,pred_class_train)
+
+# Confusion matrix with threshold of 0.5
+conf_matrix_train <- table(Train1$Car_Cancellation, predictTrain > 0.5)
+accuracy <- sum(diag(conf_matrix_train))/sum(conf_matrix_train)
+print(accuracy)  #77.03
+
+specificity <- conf_matrix_train[1, 1]/sum(conf_matrix_train[1, ])
+print(specificity) #76.69
+sensitivity <- conf_matrix_train[2, 2]/sum(conf_matrix_train[2, ])
+print(sensitivity) #78.08
+
+# Predictions on the test set
+
+predictTest = predict(log_reg1, type="response", newdata=validation)
+pred_class_test <- ifelse(predictTest > 0.5, "yes", "no")
+table(validation$Car_Cancellation,pred_class_test)
+
+# Confusion matrix with threshold of 0.5
+conf_matrix_test <- table(validation$Car_Cancellation, predictTest > 0.5)
+accuracy <- sum(diag(conf_matrix_test))/sum(conf_matrix_test)
+print(accuracy) # 75.89 percent
+
+specificity <- conf_matrix_test[1, 1]/sum(conf_matrix_test[1, ])
+print(specificity) #74.45
+sensitivity <- conf_matrix_test[2,2]/sum(conf_matrix_test[2, ])
+print(sensitivity) #77.32
+
+############################ Naive Bayes ###########################
+model_nb<-naiveBayes(Train1$Car_Cancellation ~ . ,Train1)
+#Response of the model
+model_nb
+
+#Predict the  Status on the validation data 
+pred_T <- predict(model_nb,Train1)
+pred <- predict(model_nb,validation)
+table(pred)
+
+#Confusion Matrix
+library(caret)
+confusionMatrix(pred, validation$Car_Cancellation) # acc = 75, sen = 69, spec = 82
+confusionMatrix(pred_T,Train1$Car_Cancellation) # 76.67, sen = 71.04, specificity = 82.30
+
+###################k fold cross validation with cart ################
+library(caret)
+ctrl <- trainControl(method = "repeatedcv", number = 5, savePredictions = TRUE,repeats = 4)
+# train the model 
+model_rpart<- train(Car_Cancellation~., data = smote, trControl=ctrl, method="rpart")
+
+# make predictions
+pred_train<- predict(model_rpart,Train1)
+pred_test <- predict(model_rpart,validation)
+
+# summarize results
+confusionMatrix(pred_train,Train1$Car_Cancellation) #acc = 67.18 sen = 58.18  spec = 76.19
+confusionMatrix(pred_test,validation$Car_Cancellation) #acc = 66.87 sen = 58.12 spec = 75.63
+
+############################### Decision Tree #############################
+#Decision tree with party
+library(party)
+mytree <- ctree(Car_Cancellation~., Train1, controls=ctree_control(mincriterion=0.99, minsplit=1000))
+print(mytree)
+plot(mytree,type="simple")
+
+
+#Misclassification error for Train
+tab<-table(predict(mytree), Train1$Car_Cancellation)
+print(tab)
+1-sum(diag(tab))/sum(tab) # error 0.2298
+confusionMatrix(tab) # accu = 77.01 spec = 72.50 sens = 81.53
+
+#Misclassification error for Test
+test_pred <- predict(mytree,validation)
+tab1<-table(test_pred, validation$Car_Cancellation)
+print(tab1)
+1-sum(diag(tab1))/sum(tab1) # error 0.24108
+confusionMatrix(tab1) # accu = 75.89 spec = 69.40 sens = 82.38
+
+
+############################ C50 #################################
+##Build classification model using C50
+library(C50)
+
+#a. Build model
+DT_C50 <- C5.0(Car_Cancellation~.,data=Train1)
+summary(DT_C50)
+#write(capture.output(summary(DT_C50)))
+#b. Predictions
+pred_Train = predict(DT_C50,newdata=Train1, type="class")
+pred_Test = predict(DT_C50, newdata=validation, type="class")
+
+#c.Error Metrics on train and test
+confusionMatrix(Train1$Car_Cancellation,pred_Train) # acc = 89.24 sen = 88.86 spec = 89.62
+confusionMatrix(validation$Car_Cancellation,pred_Test) # acc = 80.26 sen = 80.68 spec = 80.89 
+
+## Build classification model using cross validation
+
+c50_cv <- train(Car_Cancellation ~ .,  data=smote, method="C5.0", family="binomial",
+                trControl = ctrl, tuneLength = 5)
+
+pred_Train = predict(c50_cv, newdata=Train1)
+pred_Test = predict(c50_cv, newdata = validation)
+confusionMatrix(data=pred_Train, Train1$Car_Cancellation) # acc=94.56 sensitivity = 95.76 specificity = 93.36
+confusionMatrix(data=pred_Test, validation$Car_Cancellation) # acc = 94.09 sen = 95.16 spec = 93.03
+
+
+
+################### Random Forest ##################
+library(randomForest)
+set.seed(222)
+rf <- randomForest(Car_Cancellation~., data=Train1,
+                   ntree = 300,
+                   mtry = 4,
+                   importance = TRUE,
+                   proximity = TRUE)
+print(rf) # class.error 0.13,0.14 oob error = 13.83
+attributes(rf) 
+plot(rf)
+
+# Prediction & Confusion Matrix - train data
+library(caret)
+p1 <- predict(rf, Train1)
+confusionMatrix(p1, Train1$Car_Cancellation) # acc = 99.95 , sen = 99.95 , spec = 99.95
+
+# # Prediction & Confusion Matrix - validation data
+p2 <- predict(rf, validation)
+confusionMatrix(p2, validation$Car_Cancellation) # acc = 86.06, sen = 86.48 , spec = 86.11
+
+#highly overfitting
+#lets tune mtry value
+# Tune mtry
+t <- tuneRF(Train1[,-11], Train1[,11],
+            stepFactor = 0.5,
+            plot = TRUE,
+            ntreeTry = 300,
+            trace = TRUE, 
+            improve = 0.05) ## OOB error = 13.26% at mtry =4
+
+# No. of nodes for the trees
+hist(treesize(rf),
+     main = "No. of Nodes for the Trees",
+     col = "green") # it is in between 1000 to 1100
+
+# Variable Importance
+varImpPlot(rf)
+importance(rf)
+varUsed(rf)
+
+################### SVM ####################
+
+###create dummies for factor varibales 
+dummies <- dummyVars(Car_Cancellation~.,data=smote)
+
+x.train = predict(dummies, newdata = Train1)
+y.train = Train1$Car_Cancellation
+x.validation = predict(dummies, newdata = validation)
+y.validation = validation$Car_Cancellation
+
+# Building the model on train data
+model  =  svm(x = x.train, y = y.train, type = "C-classification", kernel = "radial", cost = 10)
+summary(model)
+
+# Predict on train and test using the model
+pred_train<-predict(model,x.train)
+pred_test<-predict(model,x.validation)
+# Build Confusion matrix
+confusionMatrix(pred_train,y.train) # acc = 93.47 sen = 93.27 spec = 93.66
+confusionMatrix(pred_test,y.validation) #acc = 81.96 sens = 82.22  spec = 81.69
+
+############ adaboost ##############
+
+library(ada) 
+model = ada(Car_Cancellation ~ ., iter = 20,data = Train1, loss="logistic")
+model
+
+# predict the values using model on test data sets. 
+pred = predict(model, Train1);
+pred 
+pred_test<- predict(model, validation)
+pred_test
+
+confusionMatrix(Train1$Car_Cancellation,pred) #acc=82.7 sen = 82.69 spec = 82.71
+confusionMatrix(validation$Car_Cancellation,pred_test) #acc=81.53 sen = 82.18 spec = 80.91
+
+#####################Boosting algorithoms##################
+########## GBM ##########
+# Load H2o library
+# install.packages("h2o")
+library(h2o)
+# Start H2O on the local machine using all available cores and with 4 gigabytes of memory
+h2o.init()
+
+# Import a local R train data frame to the H2O cloud
+train.hex <- as.h2o(x = Train1, destination_frame = "train.hex")
+
+# Prepare the parameters for the for H2O gbm grid search
+ntrees_opt <- c(5, 10, 15, 20, 30)
+maxdepth_opt <- c(2, 3, 4, 5)
+learnrate_opt <- c(0.01, 0.05, 0.1, 0.15 ,0.2, 0.25)
+hyper_parameters <- list(ntrees = ntrees_opt, 
+                         max_depth = maxdepth_opt, 
+                         learn_rate = learnrate_opt)
+
+# Build H2O GBM with grid search
+grid_GBM <- h2o.grid(algorithm = "gbm", grid_id = "grid_GBM.hex",
+                     hyper_params = hyper_parameters, 
+                     y = "Car_Cancellation", x = setdiff(names(train.hex), "Car_Cancellation"),
+                     training_frame = train.hex)
+# Remove unused R objects
+rm(ntrees_opt, maxdepth_opt, learnrate_opt, hyper_parameters)
+
+# Get grid summary
+summary(grid_GBM)
+
+# Fetch GBM grid models
+grid_GBM_models <- lapply(grid_GBM@model_ids, 
+                          function(model_id) { h2o.getModel(model_id) })
+
+# Function to find the best model with respective to AUC
+find_Best_Model <- function(grid_models){
+  best_model = grid_models[[1]]
+  best_model_AUC = h2o.auc(best_model)
+  for (i in 2:length(grid_models)) 
+  {
+    temp_model = grid_models[[i]]
+    temp_model_AUC = h2o.auc(temp_model)
+    if(best_model_AUC < temp_model_AUC)
+    {
+      best_model = temp_model
+      best_model_AUC = temp_model_AUC
+    }
+  }
+  return(best_model)
+}
+
+# Find the best model by calling find_Best_Model Function
+best_GBM_model = find_Best_Model(grid_GBM_models)
+
+rm(grid_GBM_models)
+
+# Get the auc of the best GBM model
+best_GBM_model_AUC = h2o.auc(best_GBM_model)
+
+# Examine the performance of the best model
+best_GBM_model
+
+# View the specified parameters of the best model
+best_GBM_model@parameters
+
+# Important Variables.
+varImp_GBM <- h2o.varimp(best_GBM_model)
+
+# Import a local R test data frame to the H2O cloud
+test.hex <- as.h2o(x = validation, destination_frame = "test.hex")
+
+# Predict on same test data set
+predict.hex = h2o.predict(best_GBM_model, 
+                          newdata = test.hex[,setdiff(names(test.hex), "y")])
+
+data_GBM = h2o.cbind(test.hex[,"Car_Cancellation"], predict.hex)
+
+# Copy predictions from H2O to R
+pred_GBM = as.data.frame(data_GBM)
+
+# evaluate the prediction on test data
+confusionMatrix(pred_GBM$y,pred_GBM$predict) # accu = 83.93, sens = 83.70, spec = 84.15
+# evaluate the prediction on train data
+predict.hex = h2o.predict(best_GBM_model, 
+                          newdata = train.hex[,setdiff(names(test.hex), "Car_Cancellation")])
+
+data_GBM = h2o.cbind(train.hex[,"Car_Cancellation"], predict.hex)
+
+# Copy predictions from H2O to R
+pred_GBM = as.data.frame(data_GBM)
+confusionMatrix(pred_GBM$y,pred_GBM$predict) # accu = 90.63 sens = 90.75 spec = 90.53
+
+# Import a local R test data frame to the H2O cloud
+Test.hex <- as.h2o(x = Test, destination_frame = "Test.hex")
+
+#Shutdown H2O
+h2o.shutdown(F)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
